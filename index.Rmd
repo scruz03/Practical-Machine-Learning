@@ -1,0 +1,285 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Sergio Cruz"
+date: "16 de junio de 2017"
+output: html_document
+---
+
+## Executive summary
+In this project I predict the manner in which six participants in a scientific trial performed different types of lift weight exercises.  They weared accelerometers on their belts, forearms, arms, and dumbells, so a lot of data was produced and saved in a couple of data sets named training and testing. 
+In order to complete the project I followed the following steps:
+1) Exploratory data analysis of the training data set as it had 160 variables. I explored the type and content of the variables to assess which ones were useful to build the learner model. I found many variables with missing data, null content and NAs.
+2) Feature selection. After learning about the 160 variables I realized that only 53 of them were appropiated to fit models, and run predictions.
+3) Cross validation approach. I split the training data set in two data sets: train and validation. I used the train data set to build the learner.
+4) Fit and compare different models. I checked several models to see which of them performed better on the train data set, and selected the one with the higher accuracy.
+5) Estimate out of sample error. After selecting the model, I estimated the out of sample error using the validation data set.
+6) Predictions on the testing. Finally, I ran the model on the original testing data set.
+
+## Detailed explanation
+
+### Libraries needed for the project
+
+I loaded a set of libraries needed for this project. I included libraries to allow parallel processing.
+
+```{r, message=FALSE, warning=FALSE}
+library(foreach);library(parallel);library(doParallel);
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+library(downloader); library(mlbench);library(caret);library(pROC);library(caretEnsemble);library(MASS);library(rpart);library(kernlab);library(e1071);library(data.table);library(Boruta);library(plyr);
+library(dplyr);library(pROC);library(caTools);library(ranger);library(randomForest);library(xgboost);
+library(GGally);library(gridExtra)
+```
+
+
+### Downloading the data sets
+```{r,  eval=FALSE}
+url.training = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+url.testing = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download(url.training, "pml-training.csv", mode = "wb")
+download(url.testing, "pml-testing.csv", mode = "wb")
+```
+
+### Reading the data sets
+```{r}
+training.raw = read.csv("pml-training.csv", header = TRUE, sep = "," , stringsAsFactors = FALSE)
+testing.raw = read.csv("pml-testing.csv", header = TRUE, sep = ",", stringsAsFactors = FALSE)
+```
+
+## 1. Exploratory data analysis
+I examined the content of the files and I found a lot of variables that had missing values, funny numbers such as division by zero, and a lot of NAs. So I decided to check these variables in detail. 
+
+```{r,  eval=FALSE}
+head(training.raw) # There are many columns with NAs
+str(training.raw)
+dim(training.raw)
+```
+
+Then, I extracted the response variable "classe".
+```{r}
+classe = training.raw[,160]
+```
+
+### Initial Exploratory data analysis
+
+After reading the data, I realized that there were six variables that could be eliminated from the beginning as they were not relevant (pertinent) for the problem in this project. These six variables were: X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp and new_window. This was because the main task in this project was to predict human behavior based on measurement data, and not based on time of the day or the person who performs the exercises. If I were used those variables my results would had problems when facing new data such as new people doing the exercises or new dates.
+
+```{r}
+training.raw = select(training.raw, 7:160)
+
+```
+
+So my data set had 154 variables instead of 160. Then I identified the columns with a big number of NAs. I used the command colSums to explore each column.
+
+```{r, eval=FALSE}
+colSums(sapply(training.raw, is.na))
+```
+
+From running colSums it resulted that the following 67 columns had a big proportion of NAs (19216 out of 1962 values). This was about 98% of the rows were NAs. I realized that having such high proportion of NAs these variables were not useful for the analysis. So I saved all the useless variables in var.useless.
+
+```{r}
+
+var.useless = c("max_roll_belt", "max_picth_belt", "min_roll_belt","min_pitch_belt",
+                "amplitude_roll_belt","amplitude_pitch_belt","var_total_accel_belt",
+                "avg_roll_belt","stddev_roll_belt","var_roll_belt","avg_pitch_belt",
+                "stddev_pitch_belt","var_pitch_belt","avg_yaw_belt","stddev_yaw_belt",
+                "var_yaw_belt","var_accel_arm","avg_roll_arm","stddev_roll_arm","var_roll_arm",
+                "avg_pitch_arm", "stddev_pitch_arm","var_pitch_arm","avg_yaw_arm","stddev_yaw_arm",
+                "var_yaw_arm","max_roll_arm","max_picth_arm","max_yaw_arm","min_roll_arm",
+                "min_pitch_arm","min_yaw_arm","amplitude_roll_arm","amplitude_pitch_arm",
+                "amplitude_yaw_arm","max_roll_dumbbell","max_picth_dumbbell","min_roll_dumbbell",
+                "min_pitch_dumbbell","amplitude_roll_dumbbell", "amplitude_pitch_dumbbell",
+                "var_accel_dumbbell", "avg_roll_dumbbell", "stddev_roll_dumbbell", "var_roll_dumbbell",
+                "avg_pitch_dumbbell","stddev_pitch_dumbbell", "var_pitch_dumbbell", "avg_yaw_dumbbell",
+                "stddev_yaw_dumbbell","var_yaw_dumbbell","max_roll_forearm","max_picth_forearm",
+                "min_roll_forearm","min_pitch_forearm","amplitude_roll_forearm",
+                "amplitude_pitch_forearm","var_accel_forearm","avg_roll_forearm",
+                "stddev_roll_forearm","var_roll_forearm","avg_pitch_forearm","stddev_pitch_forearm",
+                "var_pitch_forearm","avg_yaw_forearm","stddev_yaw_forearm","var_yaw_forearm")
+
+```
+
+Then, I got the difference between the original data set (training.raw) and var.useless. The remaining variables were the candidate features. Then I subset the original data set using the candidate features. After doing that my data set had 87 variables.
+
+```{r}
+candidate.features = setdiff(names(training.raw),var.useless)
+training.raw = training.raw[candidate.features]
+
+```
+
+After that, I continued exploring my data set (training.raw).  I checked some variables that did appear to have a lot of missing values, but I was not sure about them. So I used the command table to see their content. I found that there were 9 variables that had 19216 NULL values, so they had 98% NULL values and therefore they were irrelevant for the analysis as well.  The list of variables included the following: max_yaw_forearm, min_yaw_forearm, amplitude_yaw_forearm, min_yaw_belt, max_yaw_belt, amplitude_yaw_belt, min_yaw_dumbbell,max_yaw_dumbbell, and amplitude_yaw_dumbbell.
+
+```{r,  eval=FALSE}
+table(training.raw$max_yaw_forearm)
+table(training.raw$min_yaw_forearm)
+table(training.raw$amplitude_yaw_forearm)
+table(training.raw$min_yaw_belt)
+table(training.raw$max_yaw_belt)
+table(training.raw$amplitude_yaw_belt)
+table(training.raw$min_yaw_dumbbell)
+table(training.raw$max_yaw_dumbbell)
+table(training.raw$amplitude_yaw_dumbbell)
+```
+
+Then I saved all these variables in var.useless1.
+
+```{r}
+var.useless1 = c("max_yaw_forearm", "min_yaw_forearm", "amplitude_yaw_forearm","min_yaw_belt",
+                 "max_yaw_belt", "amplitude_yaw_belt","min_yaw_dumbbell", "max_yaw_dumbbell",
+                 "amplitude_yaw_dumbbell")
+```
+
+I did the same that before in order to eliminate these variables. Then my datased was reduced to 78 variables.
+
+```{r}
+candidate.features = setdiff(names(training.raw),var.useless1)
+training.raw = training.raw[candidate.features]
+```
+
+Then I decided to explore the variables Skewness and Kurtosis. These are measures of shape, i.e. they should be "numbers" but they were classified as characters in the data set. So I decided to explore their contents using again the command table. After I did explore the values, I realized that they had 98% of null values as the previous variables.
+
+```{r,  eval=FALSE}
+table(training.raw$kurtosis_roll_belt)      # About 98% null values
+table(training.raw$kurtosis_picth_belt)     # About 98% null values
+table(training.raw$kurtosis_yaw_belt)       # About 98% null values
+table(training.raw$skewness_yaw_belt)       # About 98% null values
+table(training.raw$kurtosis_roll_arm)       # About 98% null values
+table(training.raw$kurtosis_picth_arm)      # About 98% null values
+table(training.raw$kurtosis_yaw_arm)        # About 98% null values
+table(training.raw$skewness_roll_arm)       # About 98% null values
+table(training.raw$skewness_pitch_arm)      # About 98% null values
+table(training.raw$skewness_yaw_arm)        # About 98% null values
+table(training.raw$kurtosis_roll_dumbbell)  # About 98% null values
+table(training.raw$kurtosis_picth_dumbbell) # About 98% null values
+table(training.raw$kurtosis_yaw_dumbbell)   # About 98% null values
+table(training.raw$skewness_roll_dumbbell)  # About 98% null values
+table(training.raw$skewness_pitch_dumbbell) # About 98% null values
+table(training.raw$skewness_yaw_dumbbell)   # About 98% null values
+table(training.raw$kurtosis_roll_forearm)   # About 98% null values
+table(training.raw$kurtosis_picth_forearm)  # About 98% null values
+table(training.raw$kurtosis_yaw_forearm)    # About 98% null values
+table(training.raw$skewness_roll_forearm)   # About 98% null values
+table(training.raw$skewness_pitch_forearm)  # About 98% null values
+table(training.raw$skewness_yaw_forearm)    # About 98% null values
+table(training.raw$skewness_roll_belt.1)    # About 98% null values
+table(training.raw$skewness_roll_belt)      # About 98% null values
+table(training.raw$skewness_yaw_belt)       # About 98% null values
+```
+
+So I decided to eliminate all these variables. In this case all these variables were characters, so I saved all the characters variables in the variable cat_var and then I followed the same procedure as before to eliminate these variables. Now my data set (training.raw) had only 53 variables. However, I did leave out of the data set the variable classe which I will need add again later.
+
+```{r}
+cat_var = names(training.raw)[which(sapply(training.raw, is.character))]
+candidate.features = setdiff(names(training.raw),cat_var)
+training.raw = training.raw[candidate.features]
+
+```
+
+
+## 2. Feature selection
+
+Therefore I have only 53 variables plus the dependent variable (response) "classe"".  In order to verify or double-check this result I decided to run an analysis called Boruta which is useful to determine which variables are important and which are not.
+
+### Run Boruta Analysis
+
+```{r,  eval=FALSE}
+set.seed(13)
+bor.results = Boruta(training.raw,factor(classe),maxRuns=101,doTrace=0)
+print(bor.results)
+```
+
+However, the result of the analysis did not change my 53 selected variables. So I kept my selected features.
+
+## 3. Cross validation approach
+
+I wanted to have an indication of how well the learner would do when it was asked to make new predictions for data it had not seen. So instead of using the entire data set (training.raw) when training a learner. I decided to keep apart some data before training began. This was a new data set called validation. Then when training was done, I used the data that kept apart (validation) to test the performance of the learned model on "new" data.
+
+Firstly, I did recover the dependent variable and added it to the data set. I changed the name of my data set just to realize that this was the final one to split.
+
+```{r}
+datos = cbind(training.raw, classe)
+```
+
+Then, I splitted the data set to create a validation and train data set using the library caret and the command createDataPartition as we did during the lectures.
+
+```{r}
+inTrain = createDataPartition(y=datos$classe ,p=0.7, list=FALSE)
+train = datos[inTrain,]
+validation = datos[-inTrain,]
+
+```
+
+From this partition I saw that train had 13737 rows and 54 columns. Meanwhile the validation data set had 5885 rows and 54 columns. In addition, I saw that train$classe was a factor that had levels A to E in the following numbers 3906, 2685, 2396, 2252 and 2525 respectively.
+
+
+### Set the variable classe
+I set the variable classe as a factor in order to avoid problems when running the models below.
+
+```{r}
+datos$classe = factor(as.character(datos$classe))
+
+```
+
+
+## 4. Fitting and comparing different models
+I decided to use the library caretEnsemble to compare the performance of different models. 
+In this case I ran Random Forest (rf), eXtreme Gradient Boosting (xgbTree), Linear Discriminant Analysis (lda) and k-Nearest Neighbors (knn) to asses how they compare each other in terms of Accuracy. I added xgbTree as I learnt in different sources that it was a new model which produced good results.
+
+As a cross validation method I selected "repeated cross validation". Repeated k-fold CV does the same as cross validation (cv) but more than once. In this case, I used 3 repeats of 10-fold CV which would give 30 total resamples that are averaged. Note this was not the same as 30-fold CV. The key issue here was the trade-off between bias and variance. After I reading this post "Comparing Different Species of Cross-Validation" from Max Khun (see http://bit.ly/1yE0Ss5), I decided to use this approach.
+
+
+```{r}
+control = trainControl(method="repeatedcv", number=10, repeats=3, 
+                       savePredictions="final", classProbs=TRUE, 
+                       allowParallel = TRUE,
+                       index = createResample(train$classe,3))
+algorithmList = c("rf", "xgbTree","lda","knn")
+set.seed(123)
+models = caretList(factor(classe) ~. , data= train, trControl=control, 
+                   methodList=algorithmList)
+results = resamples(models) 
+summary(results) 
+dotplot(results)
+```
+
+### Best model
+From summary results and the plot I realized that the best performance was achieved using xgbTree.
+I focused on the mean values of accuracy, and these were: a) rf = 0.9953, b) xgbTree =  0.9988, c)lda = 0.7064, and d) knn = 0.8786.
+
+
+## 5. Out of sample error
+According to the notes from the lectures, the "out of sample error" is the error resulted from applying my prediction algorithm to a "new data set". As I already did use "train" data set to learn the model, I used the validation data set to estimate the "out of sample error", i.e. the error using an unseen data set. In this case, I did use only the best model, i.e. xgbTree.
+
+
+```{r}
+fit1 = train(factor(classe) ~.,method="xgbTree",data=train)
+validation$classe = factor(as.character(validation$classe))
+prediction1 = predict(fit1,validation)
+confusionMatrix(prediction1, validation$classe)
+```
+
+As it can be seen in the results, the confusion matrix showed an  Accuracy of 0.9998. So the "out of sample error" would be 1 - the Accuracy, i.e. 0,02%.
+
+
+## 6. Predictions on the test set
+
+Finally, I ran the model on the testing.raw data set. However, I needed to complete the same preprocessing that I did in the training.raw data set. So testing.raw should have only the 53 features selected plus the response variable classe which was not present in testing.raw.
+
+### Preprocessing of testing.raw
+In order to be sure that the testing.raw data set had the same features I did the following steps. Firstly, I identified the variables useless. I did that getting the difference between training.raw and testing.raw. I meant I got all the variables that I did eliminate from training.raw in the previous analysis. Secondly, I did extract all the useless variables from the complete testing.raw data set. Finally, I did subset testing.raw using only the features identified in the previous step. So I endend with the same final selected features that I left in training.raw at the end.
+
+```{r}
+useless.test = setdiff(names(testing.raw),names(training.raw))
+features.test = setdiff(names(testing.raw),useless.test)
+testing.raw = testing.raw[features.test]
+```
+
+
+### Predictions on the test set
+After I had the testing.raw file preprocessed, I did perform the final prediction of the 20 cases needed to complete the final quiz associated to this project.
+
+```{r}
+prediction2 = predict(fit1,testing.raw)
+prediction2
+```
+
+Finally, I used these results to answer the quiz.
